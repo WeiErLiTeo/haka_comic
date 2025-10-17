@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       target_branch:
-        description: '要构建的分支 (例如：main, develop)'
+        description: '要构建的分支 (例如：main)'
         required: true
-        default: 'feat/thumbnail-navigation' # 默认值已更改为您指定的分支
+        default: 'main'
 
 jobs:
   ios-build:
@@ -33,10 +33,29 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          flutter build ios --release --no-codesign 2>&1 | tee build.log
+          BUILD_COMMAND="flutter build ios --release --no-codesign"
+          LOG_FILE="build.log"
+          
+          # 运行构建，将所有输出写入 build.log 并显示在终端
+          $BUILD_COMMAND 2>&1 | tee $LOG_FILE || true
+          
+          # 检查构建是否成功：查看日志中是否有 "** BUILD FAILED **" 关键词
+          if grep -q "** BUILD FAILED **" $LOG_FILE; then
+            echo "build_status=failed" >> $GITHUB_OUTPUT
+            echo "构建失败，将上传错误日志。"
+            # 即使构建失败，Shell 也继续执行，但我们必须设置状态
+          else
+            echo "build_status=success" >> $GITHUB_OUTPUT
+            echo "构建成功，将继续打包 IPA 并上传。"
+          fi
 
-      - name: Package IPA
-        if: success()
+          # 修复 Artifact 名称错误：在 Shell 中进行替换
+          # 将 target_branch 中的所有 / 替换为 -
+          CLEAN_BRANCH_NAME=$(echo "${{ github.event.inputs.target_branch }}" | tr / -)
+          echo "clean_branch_name=$CLEAN_BRANCH_NAME" >> $GITHUB_OUTPUT # 设置新的输出变量
+
+      - name: Package IPA (Success Path)
+        if: steps.build.outputs.build_status == 'success'
         run: |
           if [ -d "build/ios/iphoneos/Runner.app" ]; then
             mkdir -p build/ios/iphoneos/Payload
@@ -48,15 +67,17 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Build Log
-        if: always()
+      - name: Upload Error Log (Failure Path)
+        if: failure() # 仅在 Job 失败时上传日志
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-log-${{ github.event.inputs.target_branch }}
+          # 修复 Artifact 命名：使用 Shell 步骤设置的 clean_branch_name 变量
+          name: ios-build-error-log-${{ steps.build.outputs.clean_branch_name }}
           path: build.log
           retention-days: 1
 
       - name: Upload IPA
+        if: success() # 仅在 Job 成功时上传 IPA
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
