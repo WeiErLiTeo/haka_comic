@@ -6,7 +6,7 @@ on:
       target_branch:
         description: '要构建的分支 (例如：main, develop)'
         required: true
-        default: 'main'
+        default: 'feat/thumbnail-navigation' # 默认值已更改为您指定的分支
 
 jobs:
   ios-build:
@@ -28,13 +28,33 @@ jobs:
 
       - run: flutter pub get
 
-      - name: Build unsigned IPA
+      - name: Build IPA and Capture Log
+        id: build
+        shell: bash
         run: |
-          flutter build ios --release --no-codesign
-          mkdir -p build/ios/iphoneos/Payload
-          mv build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
-          cd build/ios/iphoneos/
-          zip -r no-codesign-ios.ipa Payload
+          set -o pipefail
+          flutter build ios --release --no-codesign 2>&1 | tee build.log
+
+      - name: Package IPA
+        if: success()
+        run: |
+          if [ -d "build/ios/iphoneos/Runner.app" ]; then
+            mkdir -p build/ios/iphoneos/Payload
+            mv build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+            cd build/ios/iphoneos/
+            zip -r no-codesign-ios.ipa Payload
+          else
+            echo "Error: Runner.app file not found, packaging failed."
+            exit 1
+          fi
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log-${{ github.event.inputs.target_branch }}
+          path: build.log
+          retention-days: 1
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
