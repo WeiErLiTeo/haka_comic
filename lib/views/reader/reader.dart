@@ -15,7 +15,7 @@ import 'package:haka_comic/views/reader/bottom.dart';
 import 'package:haka_comic/views/reader/next_chapter.dart';
 import 'package:haka_comic/views/reader/page_no_tag.dart';
 import 'package:haka_comic/views/reader/widget/horizontal_list/horizontal_list.dart';
-import 'package:haka_comic/views/reader/widget/thumbnail_view.dart';
+import 'package:haka_comic/views/reader/widgets/thumbnail_view.dart';
 import 'package:haka_comic/views/reader/widget/vertical_list/vertical_list.dart';
 import 'package:haka_comic/widgets/base_page.dart';
 import 'package:provider/provider.dart';
