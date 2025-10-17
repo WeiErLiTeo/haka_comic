@@ -15,6 +15,7 @@ import 'package:haka_comic/views/reader/bottom.dart';
 import 'package:haka_comic/views/reader/next_chapter.dart';
 import 'package:haka_comic/views/reader/page_no_tag.dart';
 import 'package:haka_comic/views/reader/widget/horizontal_list/horizontal_list.dart';
+import 'package:haka_comic/views/reader/widget/thumbnail_view.dart';
 import 'package:haka_comic/views/reader/widget/vertical_list/vertical_list.dart';
 import 'package:haka_comic/widgets/base_page.dart';
 import 'package:provider/provider.dart';
@@ -149,6 +150,24 @@ class _ReaderState extends State<Reader> with AutoRegisterHandlerMixin {
     } else {
       _pageController.jumpToPage(index);
     }
+  }
+
+  /// 显示缩略图导航
+  void _showThumbnailView() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return FractionallySizedBox(
+          heightFactor: 0.8,
+          child: ThumbnailView(
+            images: _images,
+            initialPage: context.reader.pageNo,
+            onPageSelected: toPageNo,
+          ),
+        );
+      },
+    );
   }
 
   /// 音量键控制器
@@ -312,6 +331,7 @@ class _ReaderState extends State<Reader> with AutoRegisterHandlerMixin {
                 ReaderBottomActionType.next => isLastChapter ? null : goNext,
               };
             },
+            onThumbnailButtonPressed: _showThumbnailView,
           ),
         ],
       ),

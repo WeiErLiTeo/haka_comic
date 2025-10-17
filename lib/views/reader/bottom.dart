@@ -17,21 +17,16 @@ class ReaderBottom extends StatelessWidget {
     required this.total,
     required this.pageNo,
     required this.isVerticalMode,
+    required this.onThumbnailButtonPressed,
   });
 
   final ValueChanged<int> onPageNoChanged;
-
   final bool showToolbar;
-
   final VoidCallback? Function(ReaderBottomActionType) action;
-
-  /// 总页数
   final int total;
-
-  /// 当前页
   final int pageNo;
-
   final bool isVerticalMode;
+  final VoidCallback onThumbnailButtonPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -127,6 +122,15 @@ class ReaderBottom extends StatelessWidget {
                         label: const Text('滑动距离'),
                         icon: const Icon(Icons.straighten_outlined),
                       ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: onThumbnailButtonPressed,
+                      style: TextButton.styleFrom(
+                        foregroundColor: context.colorScheme.onSurface,
+                      ),
+                      label: const Text('快速导航'),
+                      icon: const Icon(Icons.grid_view_rounded),
+                    ),
                   ],
                 ),
               ),
@@ -141,9 +145,7 @@ class ReaderBottom extends StatelessWidget {
 /// Slider
 class PageSlider extends StatelessWidget {
   final ValueChanged<int> onChanged;
-
   final int total;
-
   final int value;
 
   const PageSlider({
