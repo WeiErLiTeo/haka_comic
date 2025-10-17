@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:haka_comic/network/models.dart';
@@ -22,6 +24,23 @@ class _ThumbnailViewState extends State<ThumbnailView> {
   int _crossAxisCount = 3;
   double _startScale = 1.0;
   double _currentScale = 1.0;
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final screenWidth = MediaQuery.of(context).size.width;
+        final itemWidth = (screenWidth - (_crossAxisCount - 1) * 4.0) / _crossAxisCount;
+        final itemHeight = itemWidth / 0.75 + 4.0;
+        final initialRow = (widget.initialPage / _crossAxisCount).floor();
+        _scrollController.jumpTo(initialRow * itemHeight);
+      }
+    });
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -42,10 +61,12 @@ class _ThumbnailViewState extends State<ThumbnailView> {
         }
       },
       child: GridView.builder(
+        controller: _scrollController,
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: _crossAxisCount,
           crossAxisSpacing: 4.0,
           mainAxisSpacing: 4.0,
+          childAspectRatio: 0.75,
         ),
         itemCount: widget.images.length,
         itemBuilder: (context, index) {
@@ -58,6 +79,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
             child: CachedNetworkImage(
               imageUrl: imageUrl,
               fit: BoxFit.cover,
+              memCacheHeight: 400,
               placeholder: (context, url) =>
                   const Center(child: CircularProgressIndicator()),
               errorWidget: (context, url, error) => const Icon(Icons.error),

@@ -122,7 +122,6 @@ class ReaderBottom extends StatelessWidget {
                         label: const Text('滑动距离'),
                         icon: const Icon(Icons.straighten_outlined),
                       ),
-                    const Spacer(),
                     TextButton.icon(
                       onPressed: onThumbnailButtonPressed,
                       style: TextButton.styleFrom(
