@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package.flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:haka_comic/network/models.dart';
 
@@ -49,7 +49,7 @@ class _ThumbnailViewState extends State<ThumbnailView> {
         ),
         itemCount: widget.images.length,
         itemBuilder: (context, index) {
-          final imageUrl = widget.images[index].url;
+          final imageUrl = widget.images[index].media.url;
           return GestureDetector(
             onTap: () {
               widget.onPageSelected(index);
