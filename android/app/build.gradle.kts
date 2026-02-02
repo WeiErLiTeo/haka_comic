@@ -46,10 +46,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        ndk {
-            // 明确包含 32/64 位 ABI，确保 32 位设备可用
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-        }
     }
 
     signingConfigs {
