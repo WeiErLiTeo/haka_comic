@@ -128,7 +128,7 @@ jobs:
           to: ${{ secrets.EMAIL_TO }}
           from: ${{ secrets.EMAIL_FROM }}
           body: Android build completed. APKs attached.
-          attachments: artifacts/app-arm64-v8a-release.apk
+          attachments: artifacts/app-arm64-v8a-release-v${{ needs.setup.outputs.app-version }}.apk
 
   ios-build:
     if: ${{ github.event_name == 'push' || github.event.inputs.target == 'ios' || github.event.inputs.target == 'all' }}
