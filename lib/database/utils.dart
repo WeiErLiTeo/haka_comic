@@ -52,3 +52,14 @@ mixin DbBackupMixin on Object {
     await initialize();
   }
 }
+
+// 自定义 SqliteOpenFactory 以启用外键支持
+class SqliteOpenFactory extends DefaultSqliteOpenFactory {
+  SqliteOpenFactory({required super.path});
+  @override
+  List<String> pragmaStatements(SqliteOpenOptions options) {
+    final statements = super.pragmaStatements(options);
+    statements.add('PRAGMA foreign_keys = ON;');
+    return statements;
+  }
+}

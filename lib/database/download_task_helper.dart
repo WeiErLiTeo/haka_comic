@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:haka_comic/network/models.dart';
 import 'package:haka_comic/views/download/background_downloader.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:sqlite_async/sqlite_async.dart';
+import 'package:sqlite_async/sqlite_async.dart' hide SqliteOpenFactory;
 import 'package:path/path.dart' as p;
+import 'package:haka_comic/database/utils.dart' show SqliteOpenFactory;
 
 final migrations = SqliteMigrations()
   ..add(
@@ -71,17 +72,6 @@ final migrations = SqliteMigrations()
         ''');
     }),
   );
-
-// 自定义 SqliteOpenFactory 以启用外键支持
-class SqliteOpenFactory extends DefaultSqliteOpenFactory {
-  SqliteOpenFactory({required super.path});
-  @override
-  List<String> pragmaStatements(SqliteOpenOptions options) {
-    final statements = super.pragmaStatements(options);
-    statements.add('PRAGMA foreign_keys = ON;');
-    return statements;
-  }
-}
 
 class DownloadTaskHelper with ChangeNotifier {
   DownloadTaskHelper._create();
