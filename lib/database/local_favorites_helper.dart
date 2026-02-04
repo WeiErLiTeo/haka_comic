@@ -1,5 +1,4 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:haka_comic/database/utils.dart';
 import 'package:haka_comic/network/models.dart';
@@ -120,11 +119,19 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
     await migrations.migrate(db);
   }
 
-  // 新建文件夹 如果name已存在，不做任何操作，如果不存在，新建
-  Future<void> createFolder(String name) async {
+  /// 新建文件夹 如果name已存在，返回false，如果不存在，新建，返回true
+  Future<bool> createFolder(String name) async {
+    final conflict = await db.getOptional(
+      'SELECT 1 FROM local_folders WHERE name = ? LIMIT 1',
+      [name.trim()],
+    );
+    if (conflict != null) {
+      return false;
+    }
     await db.execute('INSERT OR IGNORE INTO local_folders (name) VALUES (?)', [
-      name,
+      name.trim(),
     ]);
+    return true;
   }
 
   // 删除文件夹
@@ -133,22 +140,11 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
   }
 
   // 修改文件夹名称
-  Future<bool> renameFolder(int id, String name) async {
-    final conflict = await db.get(
-      'SELECT 1 FROM local_folders WHERE name = ? AND id != ? LIMIT 1',
+  Future<void> renameFolder(int id, String name) async {
+    await db.execute(
+      'UPDATE OR IGNORE local_folders SET name = ? WHERE id = ?',
       [name.trim(), id],
     );
-
-    if (conflict.isNotEmpty) {
-      return false;
-    }
-
-    await db.execute('UPDATE local_folders SET name = ? WHERE id = ?', [
-      name.trim(),
-      id,
-    ]);
-
-    return true;
   }
 
   // 更新文件夹的排序
@@ -270,21 +266,28 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
     });
   }
 
-  // 检查某个漫画是否在任意收藏夹中
-  Future<bool> isComicFavorited(String cid) async {
-    final result = await db.get(
-      'SELECT 1 FROM local_folder_comic_refs WHERE comic_cid = ? LIMIT 1',
-      [cid],
-    );
-    return result.isNotEmpty;
-  }
-
   /// 将漫画从文件夹中移除
   Future<void> removeComicFromFolder(String cid, int folderId) async {
     await db.execute(
       'DELETE FROM local_folder_comic_refs WHERE folder_id = ? AND comic_cid = ?',
       [folderId, cid],
     );
+  }
+
+  /// 漫画在文件夹中则移除，不在文件夹中则添加
+  Future<void> toggleComicInFolder({
+    required Comic comic,
+    required int folderId,
+  }) async {
+    final result = await db.getOptional(
+      'SELECT 1 FROM local_folder_comic_refs WHERE folder_id = ? AND comic_cid = ? LIMIT 1',
+      [folderId, comic.id],
+    );
+    if (result != null) {
+      await removeComicFromFolder(comic.id, folderId);
+    } else {
+      await addComicToFolder(comic: comic, folderId: folderId);
+    }
   }
 
   // 获取跟漫画相关的文件夹

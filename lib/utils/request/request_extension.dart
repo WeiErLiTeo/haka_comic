@@ -5,7 +5,7 @@ extension RequestHandlerWithoutParamsExtensions<T> on Future<T> Function() {
   RequestHandlerWithoutParams<T> useRequest({
     bool manual = false,
     OnBeforeWithoutParam? onBefore,
-    OnSuccessWithoutParam? onSuccess,
+    OnSuccessWithoutParam<T>? onSuccess,
     OnErrorWithoutParam? onError,
     OnFinallyWithoutParam? onFinally,
   }) {

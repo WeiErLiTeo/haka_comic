@@ -124,6 +124,7 @@ class _ReaderState extends State<Reader> {
         ],
       ),
       drawer: Drawer(
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         child: Column(
           children: [
             Container(

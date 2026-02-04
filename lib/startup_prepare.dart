@@ -5,6 +5,7 @@ import 'package:haka_comic/config/setup_config.dart';
 import 'package:haka_comic/database/download_task_helper.dart';
 import 'package:haka_comic/database/history_helper.dart';
 import 'package:haka_comic/database/images_helper.dart';
+import 'package:haka_comic/database/local_favorites_helper.dart';
 import 'package:haka_comic/database/read_record_helper.dart';
 import 'package:haka_comic/database/tag_block_helper.dart';
 import 'package:haka_comic/database/word_block_helper.dart';
@@ -30,6 +31,7 @@ class StartupPrepare {
       TagBlockHelper().initialize(),
       WordBlockHelper().initialize(),
       DownloadTaskHelper().initialize(),
+      LocalFavoritesHelper().initialize(),
       if (isAndroid) FlutterDisplayMode.setHighRefreshRate(),
       startDesktop(),
     ]);
