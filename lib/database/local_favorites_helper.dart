@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:haka_comic/database/utils.dart';
 import 'package:haka_comic/network/models.dart';
+import 'package:sqlite_async/sqlite3.dart';
 import 'package:sqlite_async/sqlite_async.dart' hide SqliteOpenFactory;
 
 final migrations = SqliteMigrations()
@@ -128,9 +129,17 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
     if (conflict != null) {
       return false;
     }
-    await db.execute('INSERT OR IGNORE INTO local_folders (name) VALUES (?)', [
-      name.trim(),
-    ]);
+
+    // 默认插入到末尾，避免 sort_order 全为 0 导致顺序不稳定
+    final nextOrderRow = await db.getOptional(
+      'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM local_folders',
+    );
+    final nextOrder = (nextOrderRow?['next_order'] as num?)?.toDouble() ?? 0.0;
+
+    await db.execute(
+      'INSERT OR IGNORE INTO local_folders (name, sort_order) VALUES (?, ?)',
+      [name.trim(), nextOrder],
+    );
     return true;
   }
 
@@ -147,12 +156,19 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
     );
   }
 
-  // 更新文件夹的排序
-  Future<void> updateFolderOrder(int id, double order) async {
-    await db.execute('UPDATE local_folders SET sort_order = ? WHERE id = ?', [
-      order,
-      id,
-    ]);
+  // 更新文件夹的排序（按传入顺序从 0 开始重排）
+  Future<void> updateFolderOrder(List<int> orderedFolderIds) async {
+    if (orderedFolderIds.isEmpty) return;
+    await db.writeTransaction((tx) async {
+      await tx.executeBatch(
+        'UPDATE local_folders SET sort_order = ? WHERE id = ?',
+        orderedFolderIds
+            .asMap()
+            .entries
+            .map((e) => [e.key.toDouble(), e.value])
+            .toList(),
+      );
+    });
   }
 
   // 获取文件夹列表及其漫画数量
@@ -162,19 +178,26 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
       FROM local_folders f
       LEFT JOIN local_folder_comic_refs r ON f.id = r.folder_id
       GROUP BY f.id
-      ORDER BY f.sort_order
+      ORDER BY f.sort_order, f.id
     ''');
     return result.isEmpty
         ? []
         : result.map((row) => LocalFolder.fromJson(row)).toList();
   }
 
-  // 获取某个文件夹下的所有漫画
-  Future<List<HistoryDoc>> getFolderComics(int id) async {
-    final result = await db.getAll(
-      'SELECT * FROM local_favorite_comics WHERE cid IN (SELECT comic_cid FROM local_folder_comic_refs WHERE folder_id = ?)',
-      [id],
-    );
+  // 获取某个文件夹下的所有漫画,不传id则获取所有
+  Future<List<HistoryDoc>> getFolderComics(int? id) async {
+    ResultSet result;
+
+    if (id == null) {
+      result = await db.getAll('SELECT * FROM local_favorite_comics');
+    } else {
+      result = await db.getAll(
+        'SELECT * FROM local_favorite_comics WHERE cid IN (SELECT comic_cid FROM local_folder_comic_refs WHERE folder_id = ?)',
+        [id],
+      );
+    }
+
     return result
         .map(
           (row) => HistoryDoc.fromJson({
