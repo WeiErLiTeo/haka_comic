@@ -101,6 +101,7 @@ class _LocalFavoritesState extends State<LocalFavorites> with RequestMixin {
     _createFolderHandler,
     _deleteFolderHandler,
     _renameFolderHandler,
+    _getFavoritedComicCount,
   ];
 
   Future<void> _sortFolders(List<LocalFolder> folders) async {
@@ -405,17 +406,13 @@ class _LocalFavoritesState extends State<LocalFavorites> with RequestMixin {
     return switch (_getFoldersHandler.state) {
       Success(:final data) =>
         data.isEmpty
-            ? Center(
-                child: Column(
-                  spacing: 10,
-                  children: [
-                    const Text('没有收藏夹，新建一个？'),
-                    TextButton(
-                      onPressed: _createFolder,
-                      child: const Text('新建'),
-                    ),
-                  ],
-                ),
+            ? Column(
+                spacing: 10,
+                mainAxisAlignment: .center,
+                children: [
+                  const Text('没有收藏夹，新建一个？'),
+                  TextButton(onPressed: _createFolder, child: const Text('新建')),
+                ],
               )
             : Column(children: [_folderActions(data), _folderList(data)]),
 
