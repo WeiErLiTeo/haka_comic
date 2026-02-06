@@ -8,11 +8,13 @@ class ErrorPage extends StatefulWidget {
     required this.errorMessage,
     required this.onRetry,
     this.canPop = false,
+    this.extraButton,
   });
 
   final String errorMessage;
   final Function() onRetry;
   final bool canPop;
+  final Widget? extraButton;
 
   @override
   State<ErrorPage> createState() => _ErrorPageState();
@@ -49,6 +51,7 @@ class _ErrorPageState extends State<ErrorPage> {
                 ),
             ],
           ),
+          ?widget.extraButton,
         ],
       ),
     );
