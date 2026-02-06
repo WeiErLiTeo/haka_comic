@@ -63,6 +63,10 @@ class _MineState extends State<Mine> {
         child: ErrorPage(
           errorMessage: error.toString(),
           onRetry: context.userReader.userHandler.refresh,
+          extraButton: TextButton(
+            onPressed: () => context.push('/downloads'),
+            child: const Text('我的下载'),
+          ),
         ),
       ),
       _ => Padding(
