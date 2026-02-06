@@ -14,6 +14,7 @@ import 'package:haka_comic/views/comic_details/comic_actions.dart';
 import 'package:haka_comic/views/comic_details/creator.dart';
 import 'package:haka_comic/views/comic_details/description_box.dart';
 import 'package:haka_comic/views/comic_details/header_info.dart';
+import 'package:haka_comic/views/comic_details/local_folders.dart';
 import 'package:haka_comic/views/comic_details/read_buttons.dart';
 import 'package:haka_comic/views/comic_details/read_status_bar.dart';
 import 'package:haka_comic/views/comic_details/recommendation.dart';
@@ -33,6 +34,8 @@ class ComicDetails extends StatefulWidget {
 }
 
 class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
+  final scaffoldKey = GlobalKey<ScaffoldState>();
+
   /// 漫画详情
   late final handler = fetchComicDetails.useRequest(
     defaultParams: widget.id,
@@ -115,7 +118,7 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
     final data = handler.state.data!.comic;
     // 如果没有章节，直接返回
     if (_chapters.isEmpty) return;
-    
+
     final chapter = _chapters.firstWhere(
       (element) => element.id == chapterId,
       orElse: () => _chapters.first,
@@ -139,6 +142,7 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
     return RouteAwarePageWrapper(
       builder: (context, completed) {
         return Scaffold(
+          key: scaffoldKey,
           appBar: AppBar(
             title: ValueListenableBuilder<bool>(
               valueListenable: _showTitleNotifier,
@@ -167,7 +171,7 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
                     style: MenuItemButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                     ),
-                    leadingIcon: const Icon(Icons.copy, size: 17.0),
+                    leadingIcon: const Icon(Icons.copy_outlined, size: 17.0),
                     child: const Text('复制标题'),
                     onPressed: () async {
                       await Clipboard.setData(
@@ -176,6 +180,20 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
                       Toast.show(message: '已复制');
                     },
                   ),
+                  if (data != null)
+                    MenuItemButton(
+                      style: MenuItemButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                      ),
+                      leadingIcon: const Icon(
+                        Icons.bookmark_add_outlined,
+                        size: 17.0,
+                      ),
+                      child: const Text('放入收藏夹'),
+                      onPressed: () {
+                        scaffoldKey.currentState?.openEndDrawer();
+                      },
+                    ),
                 ],
               ),
             ],
@@ -221,7 +239,7 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
                             ComicTagGroup(data: data.comic, type: '分类'),
                           if (data.comic.tags.isNotEmpty)
                             ComicTagGroup(data: data.comic, type: '标签'),
-                          
+
                           ValueListenableBuilder(
                             valueListenable: _readRecordNotifier,
                             builder: (context, value, child) {
@@ -234,7 +252,7 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
                               );
                             },
                           ),
-                          
+
                           if (UiMode.m1(context))
                             ValueListenableBuilder(
                               valueListenable: _readRecordNotifier,
@@ -245,14 +263,14 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
                                 );
                               },
                             ),
-                            
+
                           ValueListenableBuilder(
                             valueListenable: _readRecordNotifier,
                             builder: (context, value, child) {
                               return ReadStatusBar(readRecord: value);
                             },
                           ),
-                          
+
                           const Divider(),
                           ComicCreator(
                             creator: data.comic.creator,
@@ -280,6 +298,14 @@ class _ComicDetailsState extends State<ComicDetails> with RequestMixin {
               },
             ),
           ),
+          endDrawer: data == null
+              ? null
+              : Drawer(
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.zero,
+                  ),
+                  child: LocalFolders(comic: data),
+                ),
         );
       },
     );

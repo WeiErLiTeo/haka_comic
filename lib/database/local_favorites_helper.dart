@@ -149,10 +149,10 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
   }
 
   // 修改文件夹名称
-  Future<void> renameFolder(int id, String name) async {
+  Future<void> renameFolder(RenameFolderPayload payload) async {
     await db.execute(
       'UPDATE OR IGNORE local_folders SET name = ? WHERE id = ?',
-      [name.trim(), id],
+      [payload.name.trim(), payload.id],
     );
   }
 
@@ -190,10 +190,19 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
     ResultSet result;
 
     if (id == null) {
-      result = await db.getAll('SELECT * FROM local_favorite_comics');
+      result = await db.getAll(
+        'SELECT * FROM local_favorite_comics ORDER BY updated_at DESC',
+      );
     } else {
       result = await db.getAll(
-        'SELECT * FROM local_favorite_comics WHERE cid IN (SELECT comic_cid FROM local_folder_comic_refs WHERE folder_id = ?)',
+        '''
+          SELECT c.*
+          FROM local_favorite_comics c
+          INNER JOIN local_folder_comic_refs r
+            ON r.comic_cid = c.cid
+          WHERE r.folder_id = ?
+          ORDER BY r.created_at DESC
+        ''',
         [id],
       );
     }
@@ -298,18 +307,15 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
   }
 
   /// 漫画在文件夹中则移除，不在文件夹中则添加
-  Future<void> toggleComicInFolder({
-    required Comic comic,
-    required int folderId,
-  }) async {
+  Future<void> toggleComicInFolder(ToggleComicInFolderPayload payload) async {
     final result = await db.getOptional(
       'SELECT 1 FROM local_folder_comic_refs WHERE folder_id = ? AND comic_cid = ? LIMIT 1',
-      [folderId, comic.id],
+      [payload.folderId, payload.comic.id],
     );
     if (result != null) {
-      await removeComicFromFolder(comic.id, folderId);
+      await removeComicFromFolder(payload.comic.id, payload.folderId);
     } else {
-      await addComicToFolder(comic: comic, folderId: folderId);
+      await addComicToFolder(comic: payload.comic, folderId: payload.folderId);
     }
   }
 
@@ -322,6 +328,42 @@ class LocalFavoritesHelper with ChangeNotifier, DbBackupMixin {
     return result.isEmpty
         ? []
         : result.map((row) => LocalFolder.fromJson(row)).toList();
+  }
+
+  // 获取所有文件夹以及文件夹是否收藏了该漫画
+  Future<List<LocalFolderWithFavorited>> getFoldersByComic(String cid) async {
+    final result = await db.getAll(
+      '''
+        SELECT
+          f.*,
+          COUNT(r.comic_cid) AS comic_count,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM local_folder_comic_refs x
+              WHERE x.folder_id = f.id
+                AND x.comic_cid = ?
+            )
+            THEN 1 ELSE 0
+          END AS favorited
+        FROM local_folders f
+        LEFT JOIN local_folder_comic_refs r
+          ON f.id = r.folder_id
+        GROUP BY f.id
+        ORDER BY f.sort_order, f.id
+      ''',
+      [cid],
+    );
+
+    return result.isEmpty
+        ? []
+        : result.map((row) => LocalFolderWithFavorited.fromJson(row)).toList();
+  }
+
+  // 获取收藏的所有漫画数量
+  Future<int> getFavoritedComicCount() async {
+    final result = await db.get('SELECT COUNT(*) FROM local_favorite_comics');
+    return result['COUNT(*)'] as int;
   }
 }
 
@@ -352,4 +394,47 @@ class LocalFolder {
       comicCount: json['comic_count'] ?? 0,
     );
   }
+}
+
+class LocalFolderWithFavorited extends LocalFolder {
+  final bool favorited;
+
+  const LocalFolderWithFavorited({
+    required super.id,
+    required super.comicCount,
+    required super.createdAt,
+    required super.sortOrder,
+    required super.name,
+    required super.updatedAt,
+    this.favorited = false,
+  });
+
+  factory LocalFolderWithFavorited.fromJson(Map<String, dynamic> json) {
+    return LocalFolderWithFavorited(
+      id: json['id'] as int,
+      name: json['name'] as String,
+      sortOrder: (json['sort_order'] as num).toDouble(),
+      createdAt: json['created_at'] as String,
+      updatedAt: json['updated_at'] as String,
+      comicCount: json['comic_count'] ?? 0,
+      favorited: json['favorited'] == 1,
+    );
+  }
+}
+
+class RenameFolderPayload {
+  final int id;
+  final String name;
+
+  const RenameFolderPayload({required this.id, required this.name});
+}
+
+class ToggleComicInFolderPayload {
+  final Comic comic;
+  final int folderId;
+
+  const ToggleComicInFolderPayload({
+    required this.comic,
+    required this.folderId,
+  });
 }
