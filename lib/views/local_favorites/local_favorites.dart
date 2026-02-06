@@ -106,6 +106,7 @@ class _LocalFavoritesState extends State<LocalFavorites> with RequestMixin {
 
   Future<void> _sortFolders(List<LocalFolder> folders) async {
     final isSorted = await showDialog<bool>(
+      useSafeArea: false,
       context: context,
       builder: (context) {
         return LayoutBuilder(
@@ -403,25 +404,30 @@ class _LocalFavoritesState extends State<LocalFavorites> with RequestMixin {
   }
 
   Widget _buildFolders() {
-    return switch (_getFoldersHandler.state) {
-      Success(:final data) =>
-        data.isEmpty
-            ? Column(
-                spacing: 10,
-                mainAxisAlignment: .center,
-                children: [
-                  const Text('没有收藏夹，新建一个？'),
-                  TextButton(onPressed: _createFolder, child: const Text('新建')),
-                ],
-              )
-            : Column(children: [_folderActions(data), _folderList(data)]),
+    return SafeArea(
+      child: switch (_getFoldersHandler.state) {
+        Success(:final data) =>
+          data.isEmpty
+              ? Column(
+                  spacing: 10,
+                  mainAxisAlignment: .center,
+                  children: [
+                    const Text('没有收藏夹，新建一个？'),
+                    TextButton(
+                      onPressed: _createFolder,
+                      child: const Text('新建'),
+                    ),
+                  ],
+                )
+              : Column(children: [_folderActions(data), _folderList(data)]),
 
-      Error(:final error) => ErrorPage(
-        errorMessage: error.toString(),
-        onRetry: _getFoldersHandler.refresh,
-      ),
+        Error(:final error) => ErrorPage(
+          errorMessage: error.toString(),
+          onRetry: _getFoldersHandler.refresh,
+        ),
 
-      _ => const Center(child: CircularProgressIndicator()),
-    };
+        _ => const Center(child: CircularProgressIndicator()),
+      },
+    );
   }
 }
