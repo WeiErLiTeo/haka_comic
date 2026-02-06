@@ -75,7 +75,7 @@ class HistoryHelper with ChangeNotifier, DbBackupMixin {
     await db.writeTransaction((tx) async {
       await tx.execute(
         '''
-        INSERT OR REPLACE INTO history (
+        INSERT INTO history (
           cid,
           title,
           author,

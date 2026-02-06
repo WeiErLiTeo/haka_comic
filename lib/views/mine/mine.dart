@@ -51,6 +51,11 @@ class _MineState extends State<Mine> {
             title: '我的评论',
             route: '/personal_comments',
           ),
+          const _MenuItem(
+            icon: Icons.bookmark,
+            title: '本地收藏夹',
+            route: '/local_favorites',
+          ),
         ],
       ),
       Error(:final error) => Padding(

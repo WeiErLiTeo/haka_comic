@@ -10,6 +10,7 @@ import 'package:haka_comic/views/comic_details/downloader.dart';
 import 'package:haka_comic/views/comics/comics.dart';
 import 'package:haka_comic/views/download/background_downloader.dart';
 import 'package:haka_comic/views/download/downloads_ui.dart';
+import 'package:haka_comic/views/local_favorites/local_favorites.dart';
 import 'package:haka_comic/views/notifications/notifications.dart';
 import 'package:haka_comic/views/reader/providers/list_state_provider.dart';
 import 'package:haka_comic/views/reader/providers/reader_provider.dart';
@@ -173,6 +174,10 @@ final GoRouter appRouter = GoRouter(
           },
         ),
       ],
+    ),
+    GoRoute(
+      path: '/local_favorites',
+      builder: (_, _) => const LocalFavorites(),
     ),
   ],
 );

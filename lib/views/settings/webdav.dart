@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:haka_comic/config/app_config.dart';
 import 'package:haka_comic/database/history_helper.dart';
 import 'package:haka_comic/database/images_helper.dart';
+import 'package:haka_comic/database/local_favorites_helper.dart';
 import 'package:haka_comic/database/read_record_helper.dart';
 import 'package:haka_comic/rust/api/compress.dart';
 import 'package:haka_comic/utils/common.dart';
@@ -72,6 +73,7 @@ class _WebDAVState extends State<WebDAV> {
           ImagesHelper().backup(),
           HistoryHelper().backup(),
           ReadRecordHelper().backup(),
+          LocalFavoritesHelper().backup(),
         ]);
 
         final backupDir = Directory(p.join(tempDir.path, 'backup'));
@@ -114,11 +116,15 @@ class _WebDAVState extends State<WebDAV> {
         final readRecordDB = File(
           p.join(restoreDir.path, ReadRecordHelper().dbName),
         );
+        final localFavoritesDB = File(
+          p.join(restoreDir.path, LocalFavoritesHelper().dbName),
+        );
 
         await Future.wait([
           ImagesHelper().restore(imagesDB),
           HistoryHelper().restore(historyDB),
           ReadRecordHelper().restore(readRecordDB),
+          LocalFavoritesHelper().restore(localFavoritesDB),
         ]);
 
         Toast.show(message: '下载成功');

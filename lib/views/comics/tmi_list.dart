@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:haka_comic/config/app_config.dart';
 import 'package:haka_comic/utils/extension.dart';
-import 'package:haka_comic/utils/ui.dart';
 import 'package:haka_comic/views/settings/browse_mode.dart';
 
 class TMIList extends StatelessWidget {
@@ -32,45 +31,49 @@ class TMIList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = context.width;
-    final gridDelegate = isSimpleMode
-        ? SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent:
-                (UiMode.m1(context)
-                    ? 130
-                    : UiMode.m2(context)
-                    ? 135
-                    : 140) *
-                scale,
-            mainAxisSpacing: 2,
-            crossAxisSpacing: 3,
-            childAspectRatio: 1 / 1.66,
-          )
-        : SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: UiMode.m1(context)
-                ? width
-                : UiMode.m2(context)
-                ? width / 2
-                : width / 3,
-            mainAxisSpacing: 5,
-            crossAxisSpacing: 5,
-            childAspectRatio: 2.5,
-          );
-
     return SafeArea(
-      child: CustomScrollView(
-        controller: controller,
-        cacheExtent: context.height * 2,
-        slivers: [
-          if (pageSelectorBuilder != null) pageSelectorBuilder!(context),
-          SliverGrid.builder(
-            gridDelegate: gridDelegate,
-            itemBuilder: itemBuilder,
-            itemCount: itemCount,
-          ),
-          if (pageSelectorBuilder != null) pageSelectorBuilder!(context),
-          if (footerBuilder != null) footerBuilder!(context),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          final gridDelegate = isSimpleMode
+              ? SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent:
+                      (width <= 600
+                          ? 130
+                          : width > 600 && width <= 950
+                          ? 135
+                          : 140) *
+                      scale,
+                  mainAxisSpacing: 2,
+                  crossAxisSpacing: 3,
+                  childAspectRatio: 1 / 1.66,
+                )
+              : SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: width <= 600
+                      ? width
+                      : width > 600 && width <= 950
+                      ? width / 2
+                      : width / 3,
+                  mainAxisSpacing: 5,
+                  crossAxisSpacing: 5,
+                  childAspectRatio: 2.5,
+                );
+
+          return CustomScrollView(
+            controller: controller,
+            cacheExtent: context.height * 2,
+            slivers: [
+              if (pageSelectorBuilder != null) pageSelectorBuilder!(context),
+              SliverGrid.builder(
+                gridDelegate: gridDelegate,
+                itemBuilder: itemBuilder,
+                itemCount: itemCount,
+              ),
+              if (pageSelectorBuilder != null) pageSelectorBuilder!(context),
+              if (footerBuilder != null) footerBuilder!(context),
+            ],
+          );
+        },
       ),
     );
   }
