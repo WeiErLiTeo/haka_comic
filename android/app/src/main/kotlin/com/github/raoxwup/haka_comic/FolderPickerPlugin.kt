@@ -126,11 +126,15 @@ class FolderPickerPlugin(
     }
 
     private fun documentSize(entry: DocumentEntry): Long {
-        if (entry.size > 0L) return entry.size
+        return documentSize(entry.documentUri, entry.size)
+    }
+
+    private fun documentSize(documentUri: Uri, knownSize: Long = 0L): Long {
+        if (knownSize > 0L) return knownSize
 
         try {
             val descriptorLength = activity.contentResolver.openAssetFileDescriptor(
-                entry.documentUri,
+                documentUri,
                 "r",
             )?.use { descriptor -> descriptor.length }
             if (descriptorLength != null && descriptorLength >= 0L) {
@@ -140,7 +144,7 @@ class FolderPickerPlugin(
         }
 
         return try {
-            activity.contentResolver.openInputStream(entry.documentUri)?.use { input ->
+            activity.contentResolver.openInputStream(documentUri)?.use { input ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 var total = 0L
                 while (true) {
@@ -438,7 +442,7 @@ class FolderPickerPlugin(
         if (existing?.isDirectory == true) {
             throw IllegalStateException("A directory already exists at $relativePath")
         }
-        val temporaryName = "$fileName.part"
+        val temporaryName = temporaryFileName(fileName)
         val temporaryEntry = findChild(treeUri, parent, temporaryName)
         if (temporaryEntry?.isDirectory == true) {
             throw IllegalStateException("A directory already exists at $temporaryName")
@@ -455,9 +459,9 @@ class FolderPickerPlugin(
                 source.inputStream().use { input -> input.copyTo(output) }
             } ?: throw IllegalStateException("Unable to write file $relativePath")
 
-            val written = findChild(treeUri, parent, temporaryName)
-                ?: throw IllegalStateException("Temporary file is missing: $relativePath")
-            if (documentSize(written) != source.length()) {
+            // Some providers rewrite display names based on the MIME type. The URI
+            // returned by createDocument remains authoritative even when that happens.
+            if (documentSize(temporaryUri) != source.length()) {
                 throw IllegalStateException("Temporary file size mismatch: $relativePath")
             }
 
@@ -539,6 +543,7 @@ class FolderPickerPlugin(
 
     private fun copyDocumentDirectory(treeUri: Uri, source: Uri, destination: File) {
         for (entry in queryChildren(treeUri, source)) {
+            if (!entry.isDirectory && isTemporaryFileName(entry.displayName)) continue
             val target = File(destination, sanitizeForPath(entry.displayName))
             if (entry.isDirectory) {
                 target.mkdirs()
@@ -584,7 +589,7 @@ class FolderPickerPlugin(
                 val child = collectStats(treeUri, entry.documentUri)
                 count += child.first
                 bytes += child.second
-            } else if (!entry.displayName.endsWith(".part")) {
+            } else if (!isTemporaryFileName(entry.displayName)) {
                 count += 1
                 bytes += documentSize(entry)
             }
@@ -652,6 +657,19 @@ class FolderPickerPlugin(
             "zip" -> "application/zip"
             else -> "application/octet-stream"
         }
+    }
+
+    private fun temporaryFileName(fileName: String): String {
+        val extensionIndex = fileName.lastIndexOf('.')
+        return if (extensionIndex > 0) {
+            "${fileName.substring(0, extensionIndex)}.part${fileName.substring(extensionIndex)}"
+        } else {
+            "$fileName.part"
+        }
+    }
+
+    private fun isTemporaryFileName(fileName: String): Boolean {
+        return fileName.endsWith(".part") || fileName.contains(".part.")
     }
 
     private fun requireTreeUri(call: MethodCall): Uri {
