@@ -11,10 +11,11 @@ import 'package:haka_comic/network/proxy_config.dart';
 import 'package:haka_comic/network/proxy_controller.dart';
 import 'package:haka_comic/network/proxy_overrides.dart';
 import 'package:haka_comic/network/utils.dart';
-import 'package:haka_comic/utils/common.dart';
 import 'package:haka_comic/utils/extension.dart';
 import 'package:haka_comic/utils/log.dart';
+import 'package:haka_comic/views/download/download_storage.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:pool/pool.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -29,6 +30,7 @@ class BackgroundDownloader {
 
   static StreamController<List<ComicDownloadTask>>? _tasksController;
   static StreamController<int>? _speedController;
+  static StreamController<void>? _storageController;
   static ProxyListener? _proxyListener;
 
   static StreamController<List<ComicDownloadTask>> get streamController {
@@ -38,6 +40,10 @@ class BackgroundDownloader {
 
   static StreamController<int> get speedStreamController {
     return _speedController ??= StreamController<int>.broadcast();
+  }
+
+  static Stream<void> get storageChangeStream {
+    return (_storageController ??= StreamController<void>.broadcast()).stream;
   }
 
   static Future<void> initialize() {
@@ -77,10 +83,22 @@ class BackgroundDownloader {
                 ? null
                 : StackTrace.fromString(logMessage.stackTrace!),
           );
+        case WorkerInitializationFailure failure:
+          if (!readyCompleter.isCompleted) {
+            readyCompleter.completeError(
+              StateError(failure.error),
+              StackTrace.fromString(failure.stackTrace),
+            );
+          }
       }
     });
 
-    await readyCompleter.future;
+    try {
+      await readyCompleter.future;
+    } catch (_) {
+      _disposeWorker(closeStreams: false);
+      rethrow;
+    }
 
     _proxyListener ??= (proxy) {
       _postMessage(
@@ -121,7 +139,49 @@ class BackgroundDownloader {
     );
   }
 
+  static Future<void> stopForStorageChange() async {
+    try {
+      await initialize();
+    } catch (error, stackTrace) {
+      Log.w(
+        'download worker was unavailable before storage change',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _disposeWorker(closeStreams: false);
+      return;
+    }
+    final sendPort = _workerSendPort;
+    if (sendPort != null) {
+      final responsePort = ReceivePort();
+      sendPort.send(
+        WorkerMessage(
+          type: WorkerMessageType.shutdown,
+          payload: responsePort.sendPort,
+        ),
+      );
+      try {
+        await responsePort.first.timeout(const Duration(seconds: 10));
+      } finally {
+        responsePort.close();
+        _disposeWorker(closeStreams: false);
+      }
+      return;
+    }
+    _disposeWorker(closeStreams: false);
+  }
+
+  static Future<void> restartAfterStorageChange() async {
+    _disposeWorker(closeStreams: false);
+    await initialize();
+    _storageController?.add(null);
+  }
+
   static void dispose() {
+    _disposeWorker(closeStreams: true);
+  }
+
+  static void _disposeWorker({required bool closeStreams}) {
     _mainReceivePort?.close();
     _mainReceivePort = null;
     _workerSendPort = null;
@@ -131,10 +191,14 @@ class BackgroundDownloader {
     } catch (_) {}
     _workerIsolate = null;
 
-    _tasksController?.close();
-    _tasksController = null;
-    _speedController?.close();
-    _speedController = null;
+    if (closeStreams) {
+      _tasksController?.close();
+      _tasksController = null;
+      _speedController?.close();
+      _speedController = null;
+      _storageController?.close();
+      _storageController = null;
+    }
     final proxyListener = _proxyListener;
     if (proxyListener != null) {
       appProxyController.removeListener(proxyListener);
@@ -182,16 +246,23 @@ void _downloadIsolateEntry(
   final receivePort = ReceivePort();
   final worker = _DownloadWorker(mainSendPort: sendPort);
 
-  sendPort.send(receivePort.sendPort);
-
-  await worker.initialize();
-
-  receivePort.listen(worker.handleMessage);
+  try {
+    await worker.initialize();
+    receivePort.listen(worker.handleMessage);
+    sendPort.send(receivePort.sendPort);
+  } catch (error, stackTrace) {
+    receivePort.close();
+    sendPort.send(
+      WorkerInitializationFailure(
+        error: error.toString(),
+        stackTrace: stackTrace.toString(),
+      ),
+    );
+  }
 }
 
 class _DownloadWorker {
-  _DownloadWorker({required SendPort mainSendPort})
-    : _mainSendPort = mainSendPort;
+  _DownloadWorker({required this._mainSendPort});
 
   static const int _defaultConcurrency = 3;
   static const int _chapterInitConcurrency = 2;
@@ -214,13 +285,20 @@ class _DownloadWorker {
 
   late final _TaskPersistenceCoordinator _persistence;
   late final _SpeedReporter _speedReporter;
-  late final String _downloadRootPath;
+  late final DownloadStorage _storage;
+  late final String _temporaryDownloadRoot;
 
   Future<void> _mutationQueue = Future.value();
   bool _isQueueLoopRunning = false;
+  bool _isShuttingDown = false;
 
   Future<void> initialize() async {
-    _downloadRootPath = await getDownloadDirectory();
+    _storage = await DownloadStorage.load();
+    await _storage.ensureReady();
+    _temporaryDownloadRoot = p.join(
+      (await getApplicationCacheDirectory()).path,
+      'download_temp',
+    );
     await _taskHelper.initialize();
     await _cleanupOrphanImportDirs();
 
@@ -362,7 +440,24 @@ class _DownloadWorker {
       case WorkerMessageType.import:
         await _addImportedTask(message.payload as ComicDownloadTask);
         return;
+      case WorkerMessageType.shutdown:
+        await _shutdown(message.payload as SendPort);
+        return;
     }
+  }
+
+  Future<void> _shutdown(SendPort responsePort) async {
+    _isShuttingDown = true;
+    for (final task in _tasks) {
+      _cancelTaskExecution(task.comic.id);
+    }
+    while (_isQueueLoopRunning) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    for (final task in _tasks) {
+      await _persistence.flushTaskProgress(task);
+    }
+    responsePort.send(true);
   }
 
   /// 导入任务已在导入侧完成文件拷贝，且 total/completed/status 均已置为完成态，
@@ -479,6 +574,7 @@ class _DownloadWorker {
   }
 
   ComicDownloadTask? _nextRunnableTask() {
+    if (_isShuttingDown) return null;
     final downloadingTask = _findDownloadingTask();
     if (downloadingTask != null) {
       return downloadingTask;
@@ -518,7 +614,7 @@ class _DownloadWorker {
 
       final api = await _loadApi();
       final plan = _buildDownloadPlan(task, api);
-      final missingJobs = _reconcileTaskProgress(task, plan);
+      final missingJobs = await _reconcileTaskProgress(task, plan);
 
       if (!_canContinueTask(taskId, sessionId)) {
         return;
@@ -531,7 +627,6 @@ class _DownloadWorker {
         return;
       }
 
-      await _createTargetDirectories(missingJobs);
       await _downloadMissingJobs(
         task: task,
         jobs: missingJobs,
@@ -679,7 +774,7 @@ class _DownloadWorker {
             try {
               await _downloadSingleImage(
                 url: job.url,
-                path: job.filePath,
+                relativePath: job.relativePath,
                 cancelToken: cancelToken,
               );
             } catch (error, stackTrace) {
@@ -726,20 +821,22 @@ class _DownloadWorker {
 
   Future<void> _downloadSingleImage({
     required String url,
-    required String path,
+    required String relativePath,
     required CancelToken cancelToken,
   }) async {
-    final targetFile = File(path);
-    if (_isFileReady(targetFile)) {
+    if (await _storage.fileExists(relativePath)) {
       return;
     }
 
-    final tempFile = File('$path.part');
+    final tempFile = File(
+      '${p.joinAll([_temporaryDownloadRoot, ...relativePath.split('/')])}.part',
+    );
 
     await _retry<void>(
       maxAttempts: _maxRetryCount,
       run: (_) async {
         await _safeDeleteFile(tempFile);
+        await tempFile.parent.create(recursive: true);
 
         var previousCount = 0;
         await _dio.download(
@@ -758,11 +855,11 @@ class _DownloadWorker {
           );
         }
 
-        if (await targetFile.exists()) {
-          await _safeDeleteFile(targetFile);
-        }
-
-        await tempFile.rename(targetFile.path);
+        await _storage.writeFile(
+          relativePath: relativePath,
+          sourcePath: tempFile.path,
+        );
+        await _safeDeleteFile(tempFile);
       },
       onRetry: (_, _, _) async {
         await _safeDeleteFile(tempFile);
@@ -770,20 +867,12 @@ class _DownloadWorker {
     );
   }
 
-  Future<void> _createTargetDirectories(List<_DownloadJob> jobs) async {
-    final directories = jobs.map((job) => job.directoryPath).toSet();
-    for (final directoryPath in directories) {
-      await Directory(directoryPath).create(recursive: true);
-    }
-  }
-
   List<_DownloadJob> _buildDownloadPlan(ComicDownloadTask task, Api api) {
     final plan = <_DownloadJob>[];
     final orderedChapters = [...task.chapters]..sort(_compareChapter);
 
     for (final chapter in orderedChapters) {
-      final chapterDirectory = p.join(
-        _downloadRootPath,
+      final chapterDirectory = p.posix.join(
         task.comic.title.legalized,
         '${chapter.order}_${chapter.title.legalized}',
       );
@@ -798,7 +887,7 @@ class _DownloadWorker {
         plan.add(
           _DownloadJob(
             url: image.getIsolateDownloadUrl(api),
-            filePath: p.join(chapterDirectory, fileName),
+            relativePath: p.posix.join(chapterDirectory, fileName),
           ),
         );
       }
@@ -807,15 +896,15 @@ class _DownloadWorker {
     return plan;
   }
 
-  List<_DownloadJob> _reconcileTaskProgress(
+  Future<List<_DownloadJob>> _reconcileTaskProgress(
     ComicDownloadTask task,
     List<_DownloadJob> plan,
-  ) {
+  ) async {
     final missingJobs = <_DownloadJob>[];
     var completed = 0;
 
     for (final job in plan) {
-      if (_isFileReady(File(job.filePath))) {
+      if (await _storage.fileExists(job.relativePath)) {
         completed += 1;
       } else {
         missingJobs.add(job);
@@ -835,23 +924,6 @@ class _DownloadWorker {
     return missingJobs;
   }
 
-  bool _isFileReady(File file) {
-    if (!file.existsSync()) {
-      return false;
-    }
-
-    try {
-      final length = file.lengthSync();
-      if (length > 0) {
-        return true;
-      }
-
-      file.deleteSync();
-    } catch (_) {}
-
-    return false;
-  }
-
   Future<void> _safeDeleteFile(File file) async {
     try {
       if (await file.exists()) {
@@ -861,19 +933,11 @@ class _DownloadWorker {
   }
 
   Future<void> _deleteTaskFolder(ComicDownloadTask task) async {
-    final folder = Directory(
-      p.join(_downloadRootPath, task.comic.title.legalized),
-    );
-
-    if (!await folder.exists()) {
-      return;
-    }
-
     try {
-      await folder.delete(recursive: true);
+      await _storage.deleteDirectory(task.comic.title.legalized);
     } catch (error, stackTrace) {
       _sendLogError(
-        'delete download folder failed (${folder.path})',
+        'delete download folder failed (${task.comic.title})',
         error: error,
         stackTrace: stackTrace,
       );
@@ -885,7 +949,9 @@ class _DownloadWorker {
   /// 最终位置，因此这些残留一定是未完成的导入，可安全删除。
   Future<void> _cleanupOrphanImportDirs() async {
     try {
-      final root = Directory(_downloadRootPath);
+      final rootPath = _storage.localRootPath;
+      if (rootPath == null) return;
+      final root = Directory(rootPath);
       if (!await root.exists()) {
         return;
       }
@@ -1089,10 +1155,8 @@ class _SpeedReporter {
 }
 
 class _DownloadJob {
-  const _DownloadJob({required this.url, required this.filePath});
+  const _DownloadJob({required this.url, required this.relativePath});
 
   final String url;
-  final String filePath;
-
-  String get directoryPath => p.dirname(filePath);
+  final String relativePath;
 }

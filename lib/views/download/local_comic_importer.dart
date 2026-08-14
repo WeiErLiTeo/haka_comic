@@ -8,8 +8,11 @@ import 'package:haka_comic/utils/common.dart';
 import 'package:haka_comic/utils/extension.dart';
 import 'package:haka_comic/utils/native_folder_picker.dart';
 import 'package:haka_comic/views/download/background_downloader.dart';
+import 'package:haka_comic/views/download/download_storage.dart';
 import 'package:haka_comic/views/download/local_comic_files.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LocalComicImportException implements Exception {
   const LocalComicImportException(this.message);
@@ -34,6 +37,67 @@ class PickedLocalComicSource {
 
 class LocalComicImporter {
   const LocalComicImporter._();
+
+  static const _pendingImportKey = 'pendingDownloadStorageImport';
+
+  static Future<void> recoverPendingImport() async {
+    final prefs = SharedPreferencesAsync();
+    final encoded = await prefs.getString(_pendingImportKey);
+    if (encoded == null || encoded.isEmpty) return;
+
+    late final Object? decoded;
+    try {
+      decoded = jsonDecode(encoded);
+    } catch (_) {
+      await prefs.remove(_pendingImportKey);
+      rethrow;
+    }
+    if (decoded is! Map) {
+      await prefs.remove(_pendingImportKey);
+      throw const FormatException('Invalid download import journal');
+    }
+    final rawStorage = decoded['storage'];
+    final relativePath = decoded['relativePath'];
+    final rawWorkPaths = decoded['workPaths'];
+    if (rawStorage is! Map ||
+        relativePath is! String ||
+        rawWorkPaths is! List) {
+      await prefs.remove(_pendingImportKey);
+      throw const FormatException('Invalid download import journal');
+    }
+
+    final storage = DownloadStorage.fromDescriptor(
+      Map<String, Object?>.from(rawStorage),
+    );
+    if (!storage.isAndroidSaf) {
+      await prefs.remove(_pendingImportKey);
+      throw const FormatException('Invalid download import storage');
+    }
+
+    var cleaned = true;
+    try {
+      await storage.deleteDirectory(relativePath);
+    } catch (_) {
+      cleaned = false;
+    }
+
+    final workRoot = p.canonicalize(
+      p.join((await getApplicationCacheDirectory()).path, 'import_work'),
+    );
+    for (final workPath in rawWorkPaths.whereType<String>()) {
+      final normalizedWorkPath = p.canonicalize(workPath);
+      if (!p.isWithin(workRoot, normalizedWorkPath)) {
+        cleaned = false;
+        continue;
+      }
+      cleaned = await _deleteWorkDirectory(normalizedWorkPath) && cleaned;
+    }
+
+    if (!cleaned) {
+      throw const FileSystemException('无法清理上次导入留下的临时文件');
+    }
+    await prefs.remove(_pendingImportKey);
+  }
 
   static Future<PickedLocalComicSource?> pickSource() async {
     if (isAndroid || isIOS) {
@@ -76,6 +140,7 @@ class LocalComicImporter {
     PickedLocalComicSource source, {
     required Iterable<String> existingTitles,
   }) async {
+    await recoverPendingImport();
     final sourceDir = Directory(source.directoryPath);
     if (!await sourceDir.exists()) {
       throw const LocalComicImportException('所选文件夹不存在');
@@ -86,12 +151,12 @@ class LocalComicImporter {
       throw const LocalComicImportException('没有找到漫画图片');
     }
 
-    final downloadRootPath = await getDownloadDirectory();
-    await Directory(downloadRootPath).create(recursive: true);
+    final storage = await DownloadStorage.load();
+    await storage.ensureReady();
 
     final title = await _resolveAvailableTitle(
       baseTitle: source.folderName,
-      downloadRootPath: downloadRootPath,
+      storage: storage,
       existingTitles: existingTitles,
     );
 
@@ -100,8 +165,14 @@ class LocalComicImporter {
     final digest = sha1.convert(utf8.encode(idSeed)).toString();
     final taskId = 'import:$digest';
     final legalTitle = title.legalized;
-    final targetDirPath = p.join(downloadRootPath, legalTitle);
-    final tempDirPath = p.join(downloadRootPath, '.import_$digest');
+    final workRoot =
+        storage.localRootPath ??
+        p.join((await getApplicationCacheDirectory()).path, 'import_work');
+    final targetDirPath = p.join(
+      workRoot,
+      storage.isAndroidSaf ? '${legalTitle}_$digest' : legalTitle,
+    );
+    final tempDirPath = p.join(workRoot, '.import_$digest');
 
     // 只在主 isolate 里做“规划”（扫描已经完成），封面/总数等元数据也在此确定；
     // 真正的重 I/O（逐张拷贝）放到独立 isolate，避免卡 UI。
@@ -126,11 +197,7 @@ class LocalComicImporter {
       final chapterFolderName = '${chapter.order}_${chapter.title.legalized}';
 
       final files = <_ImageCopyPlan>[];
-      for (
-        var imageIndex = 0;
-        imageIndex < plan.images.length;
-        imageIndex++
-      ) {
+      for (var imageIndex = 0; imageIndex < plan.images.length; imageIndex++) {
         final sourceImage = plan.images[imageIndex];
         final ext = p.extension(sourceImage.path).toLowerCase();
         final fileName =
@@ -151,15 +218,60 @@ class LocalComicImporter {
       chapters.add(chapter);
     }
 
-    await Isolate.run(
-      () => _performCopy(
-        _CopyPlan(
-          tempDirPath: tempDirPath,
-          targetDirPath: targetDirPath,
-          chapters: copyChapters,
+    if (storage.isAndroidSaf) {
+      await _writePendingImport(
+        storage: storage,
+        relativePath: legalTitle,
+        workPaths: [tempDirPath, targetDirPath],
+      );
+    }
+
+    try {
+      await Isolate.run(
+        () => _performCopy(
+          _CopyPlan(
+            tempDirPath: tempDirPath,
+            targetDirPath: targetDirPath,
+            chapters: copyChapters,
+          ),
         ),
-      ),
-    );
+      );
+
+      if (storage.isAndroidSaf) {
+        final targetDir = Directory(targetDirPath);
+        final expected = await _localDirectoryStats(targetDir);
+        await storage.copyLocalDirectoryInto(
+          source: targetDir,
+          destinationRelativePath: legalTitle,
+        );
+        final actual = await storage.directoryStats(legalTitle);
+        if (actual.fileCount != expected.fileCount ||
+            actual.totalBytes != expected.totalBytes) {
+          throw const LocalComicImportException('导入后的文件校验失败');
+        }
+        var workCleaned = await _deleteWorkDirectory(tempDirPath);
+        workCleaned = await _deleteWorkDirectory(targetDirPath) && workCleaned;
+        if (!workCleaned) {
+          throw const FileSystemException('无法清理导入临时文件');
+        }
+        await SharedPreferencesAsync().remove(_pendingImportKey);
+      }
+    } catch (error, stackTrace) {
+      if (storage.isAndroidSaf) {
+        var cleaned = true;
+        try {
+          await storage.deleteDirectory(legalTitle);
+        } catch (_) {
+          cleaned = false;
+        }
+        cleaned = await _deleteWorkDirectory(tempDirPath) && cleaned;
+        cleaned = await _deleteWorkDirectory(targetDirPath) && cleaned;
+        if (cleaned) {
+          await SharedPreferencesAsync().remove(_pendingImportKey);
+        }
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
 
     return ComicDownloadTask(
         comic: DownloadComic(
@@ -173,6 +285,45 @@ class LocalComicImporter {
       ..total = totalImages
       ..completed = totalImages
       ..status = DownloadTaskStatus.completed;
+  }
+
+  static Future<void> _writePendingImport({
+    required DownloadStorage storage,
+    required String relativePath,
+    required List<String> workPaths,
+  }) async {
+    await SharedPreferencesAsync().setString(
+      _pendingImportKey,
+      jsonEncode({
+        'storage': storage.toDescriptor(),
+        'relativePath': relativePath,
+        'workPaths': workPaths,
+      }),
+    );
+  }
+
+  static Future<NativeDirectoryStats> _localDirectoryStats(
+    Directory directory,
+  ) async {
+    var fileCount = 0;
+    var totalBytes = 0;
+    await for (final entity in directory.list(recursive: true)) {
+      if (entity is File && !entity.path.endsWith('.part')) {
+        fileCount += 1;
+        totalBytes += await entity.length();
+      }
+    }
+    return NativeDirectoryStats(fileCount: fileCount, totalBytes: totalBytes);
+  }
+
+  static Future<bool> _deleteWorkDirectory(String path) async {
+    try {
+      final directory = Directory(path);
+      if (await directory.exists()) await directory.delete(recursive: true);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<List<_ChapterImportPlan>> _buildChapterPlans(
@@ -212,7 +363,7 @@ class LocalComicImporter {
 
   static Future<String> _resolveAvailableTitle({
     required String baseTitle,
-    required String downloadRootPath,
+    required DownloadStorage storage,
     required Iterable<String> existingTitles,
   }) async {
     final normalizedBaseTitle = _normalizeTitle(baseTitle, fallback: '导入漫画');
@@ -225,10 +376,8 @@ class LocalComicImporter {
 
     while (true) {
       final legalName = candidate.legalized;
-      final targetPath = p.join(downloadRootPath, legalName);
-
       if (!usedLegalNames.contains(legalName.toLowerCase()) &&
-          !await Directory(targetPath).exists()) {
+          !await storage.directoryExists(legalName)) {
         return candidate;
       }
 

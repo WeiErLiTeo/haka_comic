@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:haka_comic/network/utils.dart';
 import 'package:haka_comic/network/proxy_config.dart';
 import 'package:haka_comic/utils/shared_preferences_util.dart';
@@ -119,6 +121,14 @@ class AppConf {
   DownloadTaskSortOrder _downloadTaskSortOrder =
       DownloadTaskSortOrder.oldestFirst;
 
+  /// 桌面端自定义下载目录。为空时使用平台默认目录。
+  String? _desktopDownloadDirectory;
+  String? _desktopDownloadBookmark;
+
+  /// Android SAF 下载目录。
+  String? _androidDownloadTreeUri;
+  String? _androidDownloadTreeName;
+
   bool get isLogged => _token.isNotEmpty;
   bool get hasAccount => _email.isNotEmpty && _password.isNotEmpty;
 
@@ -184,6 +194,21 @@ class AppConf {
     instance._menuLocked = prefsWithCache.getBool('menuLocked') ?? false;
     instance._downloadTaskSortOrder = DownloadTaskSortOrder.fromName(
       prefsWithCache.getString('downloadTaskSortOrder'),
+    );
+    final desktopLocation = _decodeDesktopDownloadLocation(
+      prefsWithCache.getString('desktopDownloadLocation'),
+    );
+    instance._desktopDownloadDirectory =
+        desktopLocation?.path ??
+        prefsWithCache.getString('desktopDownloadDirectory');
+    instance._desktopDownloadBookmark =
+        desktopLocation?.bookmark ??
+        prefsWithCache.getString('desktopDownloadBookmark');
+    instance._androidDownloadTreeUri = prefsWithCache.getString(
+      'androidDownloadTreeUri',
+    );
+    instance._androidDownloadTreeName = prefsWithCache.getString(
+      'androidDownloadTreeName',
     );
   }
 
@@ -413,6 +438,67 @@ class AppConf {
     );
   }
 
+  Future<void> setDesktopDownloadDirectory(
+    String? value, {
+    String? bookmark,
+  }) async {
+    if (value == null || value.isEmpty) {
+      await SharedPreferencesUtil.prefsWithCache.remove(
+        'desktopDownloadLocation',
+      );
+      await SharedPreferencesUtil.prefsWithCache.remove(
+        'desktopDownloadDirectory',
+      );
+      await SharedPreferencesUtil.prefsWithCache.remove(
+        'desktopDownloadBookmark',
+      );
+      _desktopDownloadDirectory = null;
+      _desktopDownloadBookmark = null;
+      return;
+    }
+    await SharedPreferencesUtil.prefsWithCache.setString(
+      'desktopDownloadLocation',
+      jsonEncode({'path': value, 'bookmark': bookmark}),
+    );
+    await SharedPreferencesUtil.prefsWithCache.remove(
+      'desktopDownloadDirectory',
+    );
+    await SharedPreferencesUtil.prefsWithCache.remove(
+      'desktopDownloadBookmark',
+    );
+    _desktopDownloadDirectory = value;
+    _desktopDownloadBookmark = bookmark;
+  }
+
+  Future<void> setAndroidDownloadTree({
+    required String? uri,
+    required String? name,
+  }) async {
+    if (uri == null || uri.isEmpty) {
+      await SharedPreferencesUtil.prefsWithCache.remove(
+        'androidDownloadTreeUri',
+      );
+      await SharedPreferencesUtil.prefsWithCache.remove(
+        'androidDownloadTreeName',
+      );
+      _androidDownloadTreeUri = null;
+      _androidDownloadTreeName = null;
+      return;
+    }
+
+    final storedName = name ?? '已选择的文件夹';
+    await SharedPreferencesUtil.prefsWithCache.setString(
+      'androidDownloadTreeUri',
+      uri,
+    );
+    await SharedPreferencesUtil.prefsWithCache.setString(
+      'androidDownloadTreeName',
+      storedName,
+    );
+    _androidDownloadTreeUri = uri;
+    _androidDownloadTreeName = storedName;
+  }
+
   String get email => _email;
   String get password => _password;
   String get token => _token;
@@ -453,10 +539,30 @@ class AppConf {
   int get preloadImageCount => _preloadImageCount;
   bool get menuLocked => _menuLocked;
   DownloadTaskSortOrder get downloadTaskSortOrder => _downloadTaskSortOrder;
+  String? get desktopDownloadDirectory => _desktopDownloadDirectory;
+  String? get desktopDownloadBookmark => _desktopDownloadBookmark;
+  String? get androidDownloadTreeUri => _androidDownloadTreeUri;
+  String? get androidDownloadTreeName => _androidDownloadTreeName;
 
   /// 清除token
   void clearAuth() {
     _token = '';
     SharedPreferencesUtil.prefsWithCache.remove('token');
+  }
+}
+
+({String path, String? bookmark})? _decodeDesktopDownloadLocation(
+  String? encoded,
+) {
+  if (encoded == null || encoded.isEmpty) return null;
+  try {
+    final decoded = jsonDecode(encoded);
+    if (decoded is! Map) return null;
+    final path = decoded['path'];
+    if (path is! String || path.isEmpty) return null;
+    final bookmark = decoded['bookmark'];
+    return (path: path, bookmark: bookmark is String ? bookmark : null);
+  } on FormatException {
+    return null;
   }
 }

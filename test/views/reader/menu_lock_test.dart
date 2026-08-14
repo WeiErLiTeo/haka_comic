@@ -123,6 +123,15 @@ void main() {
     return ((color.toARGB32() >> 24) & 0xff) / 255.0;
   }
 
+  void expectMenuLockExpansion(
+    ReaderProvider readerProvider, {
+    required bool expanded,
+  }) {
+    expect(readerProvider.menuLockExpanded, expanded);
+    expect(find.byTooltip(expanded ? '解锁菜单' : '展开菜单锁'), findsOneWidget);
+    expect(find.byTooltip(expanded ? '展开菜单锁' : '解锁菜单'), findsNothing);
+  }
+
   testWidgets('follows toolbar visibility while the menu is unlocked', (
     tester,
   ) async {
@@ -159,24 +168,21 @@ void main() {
 
     final button = find.byKey(const ValueKey('menu_lock_button'));
     expect(button, findsOneWidget);
-    expect(find.byKey(const ValueKey('menu_lock_collapsed')), findsOneWidget);
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsNothing);
+    expectMenuLockExpansion(readerProvider, expanded: false);
     expect(listStateProvider.lockMenu, isTrue);
     expect(readerProvider.showToolbar, isFalse);
 
     await tester.tap(button);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_collapsed')), findsNothing);
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsOneWidget);
+    expectMenuLockExpansion(readerProvider, expanded: true);
     expect(listStateProvider.lockMenu, isTrue);
     expect(readerProvider.showToolbar, isFalse);
 
     await tester.tapAt(const Offset(700, 300));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_collapsed')), findsNothing);
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsOneWidget);
+    expectMenuLockExpansion(readerProvider, expanded: true);
   });
 
   testWidgets('expanded locked MenuLock collapses when the list scrolls', (
@@ -198,8 +204,7 @@ void main() {
     readerProvider.collapseMenuLock();
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_collapsed')), findsOneWidget);
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsNothing);
+    expectMenuLockExpansion(readerProvider, expanded: false);
   });
 
   testWidgets('locked MenuLock collapses only after scroll threshold', (
@@ -223,18 +228,17 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('menu_lock_button')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsOneWidget);
+    expectMenuLockExpansion(readerProvider, expanded: true);
 
     dispatchReaderScroll(tester, 10);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsOneWidget);
+    expectMenuLockExpansion(readerProvider, expanded: true);
 
     dispatchReaderScroll(tester, 20);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_collapsed')), findsOneWidget);
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsNothing);
+    expectMenuLockExpansion(readerProvider, expanded: false);
   });
 
   testWidgets('collapsed locked MenuLock has lower surface opacity', (
@@ -302,7 +306,6 @@ void main() {
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('menu_lock_collapsed')), findsNothing);
-    expect(find.byKey(const ValueKey('menu_lock_expanded')), findsOneWidget);
+    expectMenuLockExpansion(readerProvider, expanded: true);
   });
 }
