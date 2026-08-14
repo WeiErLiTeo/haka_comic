@@ -85,6 +85,24 @@ class NativeFolderPicker {
   static const MethodChannel _channel = MethodChannel(
     'haka_comic/folder_picker',
   );
+  static final Map<String, void Function(int)> _copyProgressCallbacks = {};
+  static var _copyOperationCounter = 0;
+  static var _methodCallHandlerInitialized = false;
+
+  static void _ensureMethodCallHandler() {
+    if (_methodCallHandlerInitialized) return;
+    _methodCallHandlerInitialized = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method != 'copyLocalDirectoryProgress') return;
+      final arguments = call.arguments;
+      if (arguments is! Map<Object?, Object?>) return;
+
+      final operationId = arguments['operationId'] as String?;
+      final copiedBytes = (arguments['copiedBytes'] as num?)?.toInt();
+      if (operationId == null || copiedBytes == null) return;
+      _copyProgressCallbacks[operationId]?.call(copiedBytes);
+    });
+  }
 
   static Future<PickedFolderSnapshot?> pickDirectorySnapshot({
     bool recursive = true,
@@ -171,6 +189,48 @@ class NativeFolderPicker {
       'relativePath': relativePath,
       'sourcePath': sourcePath,
     });
+  }
+
+  static Future<void> copyLocalDirectoryInto({
+    required String treeUri,
+    required String relativePath,
+    required String sourcePath,
+    void Function(int bytes)? onProgress,
+  }) async {
+    _ensureMethodCallHandler();
+    final operationId =
+        '${DateTime.now().microsecondsSinceEpoch}_${_copyOperationCounter++}';
+    var reportedBytes = 0;
+
+    if (onProgress != null) {
+      _copyProgressCallbacks[operationId] = (copiedBytes) {
+        final delta = copiedBytes - reportedBytes;
+        if (delta <= 0) return;
+        reportedBytes = copiedBytes;
+        onProgress(delta);
+      };
+    }
+
+    try {
+      final result = await _channel
+          .invokeMethod<Object?>('copyLocalDirectoryInto', {
+            'treeUri': treeUri,
+            'relativePath': relativePath,
+            'sourcePath': sourcePath,
+            'operationId': operationId,
+          });
+      if (result is! Map<Object?, Object?>) {
+        throw const FormatException('Invalid directory copy result');
+      }
+
+      final copiedBytes = (result['copiedBytes'] as num?)?.toInt() ?? 0;
+      final remainingBytes = copiedBytes - reportedBytes;
+      if (remainingBytes > 0) {
+        onProgress?.call(remainingBytes);
+      }
+    } finally {
+      _copyProgressCallbacks.remove(operationId);
+    }
   }
 
   static Future<String> materializeDirectory({

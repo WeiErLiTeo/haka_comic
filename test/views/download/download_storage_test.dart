@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haka_comic/views/download/download_storage.dart';
 import 'package:haka_comic/views/download/download_storage_migration.dart';
@@ -63,6 +64,51 @@ void main() {
 
     await storage.deleteDirectory('漫画');
     expect(await storage.directoryExists('漫画'), isFalse);
+  });
+
+  test('SAF storage copies a local directory with one native call', () async {
+    const channel = MethodChannel('haka_comic/folder_picker');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'copyLocalDirectoryInto') {
+            return <String, Object>{'copiedFiles': 2, 'copiedBytes': 5};
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    final sourceRoot = await Directory.systemTemp.createTemp(
+      'haka_saf_source_',
+    );
+    addTearDown(() async {
+      if (await sourceRoot.exists()) await sourceRoot.delete(recursive: true);
+    });
+
+    var copiedBytes = 0;
+    final storage = DownloadStorage.androidSaf(
+      treeUri: 'content://provider/tree/downloads',
+      displayName: 'Downloads',
+    );
+    await storage.copyLocalDirectoryInto(
+      source: sourceRoot,
+      destinationRelativePath: r'漫画\1_第一话',
+      onProgress: (bytes) => copiedBytes += bytes,
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'copyLocalDirectoryInto');
+    expect(calls.single.arguments, {
+      'treeUri': 'content://provider/tree/downloads',
+      'relativePath': '漫画/1_第一话',
+      'sourcePath': sourceRoot.path,
+      'operationId': isA<String>(),
+    });
+    expect(copiedBytes, 5);
   });
 
   test('migration cleanup only removes copied destination folders', () async {

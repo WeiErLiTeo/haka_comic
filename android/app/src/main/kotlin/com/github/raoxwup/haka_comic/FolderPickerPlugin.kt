@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.plugin.common.BinaryMessenger
@@ -21,6 +22,7 @@ class FolderPickerPlugin(
     companion object {
         private const val CHANNEL = "haka_comic/folder_picker"
         private const val REQUEST_CODE_PICK_DIRECTORY = 0xF017
+        private const val COPY_PROGRESS_INTERVAL_MS = 100L
     }
 
     private val channel = MethodChannel(messenger, CHANNEL)
@@ -77,6 +79,15 @@ class FolderPickerPlugin(
                             ?: throw IllegalArgumentException("sourcePath is required"),
                     )
                     null
+                }
+                "copyLocalDirectoryInto" -> runStorageCall(result) {
+                    copyLocalDirectoryInto(
+                        treeUri = requireTreeUri(call),
+                        relativePath = requireRelativePath(call),
+                        sourcePath = call.argument<String>("sourcePath")
+                            ?: throw IllegalArgumentException("sourcePath is required"),
+                        operationId = call.argument<String>("operationId"),
+                    )
                 }
                 "materializeDirectory" -> runStorageCall(result) {
                     materializeDirectory(
@@ -399,29 +410,65 @@ class FolderPickerPlugin(
         return current
     }
 
-    private fun ensureDirectory(
-        treeUri: Uri,
-        parts: List<String>,
-    ): Uri {
-        var parent = rootDocumentUri(treeUri)
-        for (part in parts) {
-            val existing = findChild(treeUri, parent, part)
-            if (existing != null) {
-                if (!existing.isDirectory) {
-                    throw IllegalStateException("A file already exists at $part")
-                }
-                parent = existing.documentUri
-                continue
-            }
+    private inner class SafWriteSession(private val treeUri: Uri) {
+        private val childrenByParent = mutableMapOf<Uri, MutableMap<String, DocumentEntry>>()
 
-            parent = DocumentsContract.createDocument(
-                activity.contentResolver,
-                parent,
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                part,
-            ) ?: throw IllegalStateException("Unable to create directory $part")
+        fun findChild(parent: Uri, name: String): DocumentEntry? {
+            return children(parent)[name]
         }
-        return parent
+
+        fun ensureDirectory(parts: List<String>): Uri {
+            var parent = rootDocumentUri(treeUri)
+            for (part in parts) {
+                val existing = findChild(parent, part)
+                if (existing != null) {
+                    if (!existing.isDirectory) {
+                        throw IllegalStateException("A file already exists at $part")
+                    }
+                    parent = existing.documentUri
+                    continue
+                }
+
+                val documentUri = DocumentsContract.createDocument(
+                    activity.contentResolver,
+                    parent,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    part,
+                ) ?: throw IllegalStateException("Unable to create directory $part")
+                remember(
+                    parent,
+                    DocumentEntry(
+                        documentUri = documentUri,
+                        displayName = part,
+                        mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+                        size = 0L,
+                        isDirectory = true,
+                    ),
+                )
+                parent = documentUri
+            }
+            return parent
+        }
+
+        fun remember(parent: Uri, entry: DocumentEntry) {
+            children(parent)[entry.displayName] = entry
+        }
+
+        fun forget(parent: Uri, name: String) {
+            children(parent).remove(name)
+        }
+
+        private fun children(parent: Uri): MutableMap<String, DocumentEntry> {
+            return childrenByParent.getOrPut(parent) {
+                val entries = linkedMapOf<String, DocumentEntry>()
+                for (entry in queryChildren(treeUri, parent)) {
+                    if (!entries.containsKey(entry.displayName)) {
+                        entries[entry.displayName] = entry
+                    }
+                }
+                entries
+            }
+        }
     }
 
     private fun writeFile(treeUri: Uri, relativePath: String, sourcePath: String) {
@@ -436,23 +483,40 @@ class FolderPickerPlugin(
             throw IllegalArgumentException("relativePath is required")
         }
 
-        val parent = ensureDirectory(treeUri, parts.dropLast(1))
+        writeFile(SafWriteSession(treeUri), parts, source)
+    }
+
+    private fun writeFile(session: SafWriteSession, parts: List<String>, source: File) {
+        val parent = session.ensureDirectory(parts.dropLast(1))
+        val relativePath = parts.joinToString("/")
         val fileName = parts.last()
-        val existing = findChild(treeUri, parent, fileName)
+        val existing = session.findChild(parent, fileName)
         if (existing?.isDirectory == true) {
             throw IllegalStateException("A directory already exists at $relativePath")
         }
         val temporaryName = temporaryFileName(fileName)
-        val temporaryEntry = findChild(treeUri, parent, temporaryName)
+        val temporaryEntry = session.findChild(parent, temporaryName)
         if (temporaryEntry?.isDirectory == true) {
             throw IllegalStateException("A directory already exists at $temporaryName")
         }
+        val mimeType = mimeTypeFor(fileName)
         val temporaryUri = temporaryEntry?.documentUri ?: DocumentsContract.createDocument(
             activity.contentResolver,
             parent,
-            mimeTypeFor(fileName),
+            mimeType,
             temporaryName,
-        ) ?: throw IllegalStateException("Unable to create temporary file $relativePath")
+        )?.also { documentUri ->
+            session.remember(
+                parent,
+                DocumentEntry(
+                    documentUri = documentUri,
+                    displayName = temporaryName,
+                    mimeType = mimeType,
+                    size = 0L,
+                    isDirectory = false,
+                ),
+            )
+        } ?: throw IllegalStateException("Unable to create temporary file $relativePath")
 
         try {
             activity.contentResolver.openOutputStream(temporaryUri, "wt")?.use { output ->
@@ -473,18 +537,99 @@ class FolderPickerPlugin(
                 if (!deleted) {
                     throw IllegalStateException("Unable to replace file $relativePath")
                 }
+                session.forget(parent, fileName)
             }
-            DocumentsContract.renameDocument(
+            val finalUri = DocumentsContract.renameDocument(
                 activity.contentResolver,
                 temporaryUri,
                 fileName,
             ) ?: throw IllegalStateException("Unable to finalize file $relativePath")
+            session.forget(parent, temporaryName)
+            session.remember(
+                parent,
+                DocumentEntry(
+                    documentUri = finalUri,
+                    displayName = fileName,
+                    mimeType = mimeType,
+                    size = source.length(),
+                    isDirectory = false,
+                ),
+            )
         } catch (error: Exception) {
             try {
                 DocumentsContract.deleteDocument(activity.contentResolver, temporaryUri)
             } catch (_: Exception) {
             }
+            session.forget(parent, temporaryName)
             throw error
+        }
+    }
+
+    private fun copyLocalDirectoryInto(
+        treeUri: Uri,
+        relativePath: String,
+        sourcePath: String,
+        operationId: String?,
+    ): Map<String, Long> {
+        requirePersistedPermission(treeUri, requireWrite = true)
+        val source = File(sourcePath)
+        if (!source.isDirectory) {
+            throw IllegalArgumentException("Source directory does not exist: $sourcePath")
+        }
+
+        val destinationParts = pathParts(relativePath)
+        val session = SafWriteSession(treeUri)
+        var copiedFiles = 0L
+        var copiedBytes = 0L
+        var lastProgressAt = SystemClock.elapsedRealtime()
+
+        fun copyDirectory(directory: File, childParts: List<String>) {
+            val children = directory.listFiles()
+                ?: throw IllegalStateException("Unable to read source directory: ${directory.path}")
+            for (child in children) {
+                if (child.isDirectory) {
+                    copyDirectory(child, childParts + child.name)
+                    continue
+                }
+                if (!child.isFile || child.path.endsWith(".part")) continue
+
+                val fileSize = child.length()
+                writeFile(
+                    session = session,
+                    parts = destinationParts + childParts + child.name,
+                    source = child,
+                )
+                copiedFiles += 1
+                copiedBytes += fileSize
+
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastProgressAt >= COPY_PROGRESS_INTERVAL_MS) {
+                    notifyCopyProgress(operationId, copiedFiles, copiedBytes)
+                    lastProgressAt = now
+                }
+            }
+        }
+
+        copyDirectory(source, emptyList())
+        notifyCopyProgress(operationId, copiedFiles, copiedBytes)
+        return mapOf("copiedFiles" to copiedFiles, "copiedBytes" to copiedBytes)
+    }
+
+    private fun notifyCopyProgress(
+        operationId: String?,
+        copiedFiles: Long,
+        copiedBytes: Long,
+    ) {
+        if (operationId.isNullOrBlank()) return
+        activity.runOnUiThread {
+            channel.invokeMethod(
+                "copyLocalDirectoryProgress",
+                mapOf(
+                    "operationId" to operationId,
+                    "copiedFiles" to copiedFiles,
+                    "copiedBytes" to copiedBytes,
+                ),
+            )
         }
     }
 

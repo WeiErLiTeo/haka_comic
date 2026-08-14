@@ -272,6 +272,17 @@ class DownloadStorage {
     required String destinationRelativePath,
     DownloadStorageProgress? onProgress,
   }) async {
+    final treeUri = androidTreeUri;
+    if (treeUri != null) {
+      await NativeFolderPicker.copyLocalDirectoryInto(
+        treeUri: treeUri,
+        relativePath: _safPath(destinationRelativePath),
+        sourcePath: source.path,
+        onProgress: onProgress,
+      );
+      return;
+    }
+
     await for (final entity in source.list(
       recursive: true,
       followLinks: false,
