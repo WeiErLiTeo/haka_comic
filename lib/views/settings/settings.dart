@@ -8,6 +8,7 @@ import 'package:haka_comic/views/settings/change_image_quality.dart';
 import 'package:haka_comic/views/settings/change_password.dart';
 import 'package:haka_comic/views/settings/clear_cache.dart';
 import 'package:haka_comic/views/settings/comic_block_scale.dart';
+import 'package:haka_comic/views/settings/download_path.dart';
 import 'package:haka_comic/views/settings/logout.dart';
 import 'package:haka_comic/views/settings/pager.dart';
 import 'package:haka_comic/views/settings/theme.dart' as t;
@@ -92,6 +93,7 @@ class Settings extends StatelessWidget {
             Block(
               title: '通用',
               children: [
+                if (!isIOS) const DownloadPathSetting(),
                 const ClearCache(),
                 const Auth(),
                 MenuListTile.withAction(

@@ -13,13 +13,13 @@ import 'package:haka_comic/utils/loader.dart';
 import 'package:haka_comic/utils/log.dart';
 import 'package:haka_comic/utils/ui.dart';
 import 'package:haka_comic/views/download/background_downloader.dart';
+import 'package:haka_comic/views/download/download_storage.dart';
 import 'package:haka_comic/views/download/local_comic_importer.dart';
 import 'package:haka_comic/views/reader/state/comic_state.dart';
 import 'package:haka_comic/widgets/empty.dart';
 import 'package:haka_comic/widgets/slide_transition_x.dart';
 import 'package:haka_comic/widgets/toast.dart';
 import 'package:haka_comic/widgets/ui_image.dart';
-import 'package:path/path.dart' as p;
 
 typedef _DownloadTaskAction = ({
   IconData icon,
@@ -80,27 +80,27 @@ class _DownloadsState extends State<Downloads> {
   List<ComicDownloadTask> tasks = [];
   late final StreamSubscription _subscription;
   late final StreamSubscription<int> _speedSubscription;
+  late final StreamSubscription<void> _storageSubscription;
   bool _isSelecting = false;
   Set<String> _selectedTaskIds = {};
   int _downloadSpeed = 0;
-  String? _downloadRoot;
+  DownloadStorage? _storage;
   late DownloadTaskSortOrder _sortOrder = AppConf().downloadTaskSortOrder;
 
   @override
   void initState() {
     super.initState();
-    _resolveDownloadRoot();
+    _resolveStorage();
     _subscription =
         (widget.taskStream ?? BackgroundDownloader.streamController.stream)
-            .listen(
-              (event) => setState(() {
-                tasks = event;
-              }),
-            );
+            .listen((event) => setState(() => tasks = event));
     _speedSubscription =
         (widget.speedStream ??
                 BackgroundDownloader.speedStreamController.stream)
             .listen((speed) => setState(() => _downloadSpeed = speed));
+    _storageSubscription = BackgroundDownloader.storageChangeStream.listen(
+      (_) => _resolveStorage(),
+    );
     (widget.onRequestTasks ?? BackgroundDownloader.getTasks).call();
   }
 
@@ -108,15 +108,16 @@ class _DownloadsState extends State<Downloads> {
   void dispose() {
     _subscription.cancel();
     _speedSubscription.cancel();
+    _storageSubscription.cancel();
     super.dispose();
   }
 
   /// 本地导入漫画的封面以“相对 download 根目录”的形式存库，展示时在此拼回绝对路径，
   /// 规避应用沙盒目录变化导致绝对路径失效。
-  Future<void> _resolveDownloadRoot() async {
-    final root = await getDownloadDirectory();
+  Future<void> _resolveStorage() async {
+    final storage = await DownloadStorage.load();
     if (mounted) {
-      setState(() => _downloadRoot = root);
+      setState(() => _storage = storage);
     }
   }
 
@@ -213,26 +214,57 @@ class _DownloadsState extends State<Downloads> {
     return _selectedTaskIds.isNotEmpty && isAllCompleted;
   }
 
-  Future<List<ComicExportItem>> _getSelectedExportItems() async {
-    final downloadPath = await getDownloadDirectory();
-    return [
-      for (final task in _selectedTasks)
-        (
-          fileStem: task.comic.title.legalized,
-          sourceFolderPath: p.join(downloadPath, task.comic.title.legalized),
-        ),
-    ];
+  Future<({List<ComicExportItem> items, List<String> cleanupPaths})>
+  _getSelectedExportItems() async {
+    final storage = _storage ?? await DownloadStorage.load();
+    final cleanupPaths = <String>[];
+    final items = <ComicExportItem>[];
+    try {
+      for (final task in _selectedTasks) {
+        final relativePath = task.comic.title.legalized;
+        final sourcePath =
+            storage.absoluteFilePath(relativePath) ??
+            await storage.materializeDirectory(relativePath);
+        if (storage.isAndroidSaf) cleanupPaths.add(sourcePath);
+        items.add((fileStem: relativePath, sourceFolderPath: sourcePath));
+      }
+      return (items: items, cleanupPaths: cleanupPaths);
+    } catch (_) {
+      await _cleanupMaterializedExports(cleanupPaths);
+      rethrow;
+    }
   }
 
   Future<void> _exportSelectedTasks({required ExportFileType type}) async {
-    final items = await _getSelectedExportItems();
-    if (!mounted) return;
-    await ComicExporter.export(
-      context: context,
-      items: items,
-      type: type,
-      onComplete: close,
-    );
+    ({List<ComicExportItem> items, List<String> cleanupPaths})? prepared;
+    try {
+      prepared = await _getSelectedExportItems();
+      if (!mounted) return;
+      await ComicExporter.export(
+        context: context,
+        items: prepared.items,
+        type: type,
+        onComplete: close,
+      );
+    } catch (error, stackTrace) {
+      Log.e(
+        'Prepare downloaded comics for export failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      Toast.show(message: '无法读取下载文件，请检查下载位置权限');
+    } finally {
+      await _cleanupMaterializedExports(prepared?.cleanupPaths ?? const []);
+    }
+  }
+
+  Future<void> _cleanupMaterializedExports(List<String> paths) async {
+    for (final path in paths) {
+      final directory = Directory(path);
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    }
   }
 
   VoidCallback? exportFile({required ExportFileType type}) {
@@ -405,7 +437,7 @@ class _DownloadsState extends State<Downloads> {
                     task: task,
                     isSelecting: _isSelecting,
                     isSelected: isSelected,
-                    downloadRoot: _downloadRoot,
+                    storage: _storage,
                     contextMenu: menu,
                     onTap: () {
                       if (_isSelecting) {
@@ -568,7 +600,7 @@ class _DownloadTaskItem extends StatelessWidget {
   final ComicDownloadTask task;
   final bool isSelecting;
   final bool isSelected;
-  final String? downloadRoot;
+  final DownloadStorage? storage;
   final VoidCallback onTap;
   final Future<void> Function(String, ComicDownloadTask) onItemSelected;
   final ContextMenu contextMenu;
@@ -578,7 +610,7 @@ class _DownloadTaskItem extends StatelessWidget {
     required this.task,
     required this.isSelecting,
     required this.isSelected,
-    required this.downloadRoot,
+    required this.storage,
     required this.onTap,
     required this.onItemSelected,
     required this.contextMenu,
@@ -590,9 +622,6 @@ class _DownloadTaskItem extends StatelessWidget {
     final image = task.comic.image;
     final isImported = task.source == DownloadTaskSource.import;
     final cover = task.comic.cover;
-    final localCoverPath = (downloadRoot == null || cover.isEmpty)
-        ? null
-        : p.join(downloadRoot!, cover);
     return ContextMenuRegion(
       key: ValueKey(task.comic.id),
       contextMenu: contextMenu,
@@ -616,7 +645,7 @@ class _DownloadTaskItem extends StatelessWidget {
               AspectRatio(
                 aspectRatio: 90 / 130,
                 child: isImported
-                    ? _LocalCoverImage(path: localCoverPath)
+                    ? _StoredCoverImage(storage: storage, relativePath: cover)
                     : UiImage(
                         url: image?.url ?? task.comic.cover,
                         cacheKey: image?.cacheKey,
@@ -724,6 +753,34 @@ class _LocalCoverImage extends StatelessWidget {
         color: context.colorScheme.surfaceContainerHigh,
         child: const Center(child: Icon(Icons.broken_image)),
       ),
+    );
+  }
+}
+
+class _StoredCoverImage extends StatelessWidget {
+  const _StoredCoverImage({required this.storage, required this.relativePath});
+
+  final DownloadStorage? storage;
+  final String relativePath;
+  static final Map<String, Future<String?>> _materializedCovers = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final currentStorage = storage;
+    if (currentStorage == null || relativePath.isEmpty) {
+      return const _LocalCoverImage(path: null);
+    }
+
+    final localPath = currentStorage.absoluteFilePath(relativePath);
+    if (localPath != null) return _LocalCoverImage(path: localPath);
+
+    final cacheKey = '${currentStorage.androidTreeUri}|$relativePath';
+    return FutureBuilder<String?>(
+      future: _materializedCovers.putIfAbsent(
+        cacheKey,
+        () => currentStorage.materializeFile(relativePath),
+      ),
+      builder: (_, snapshot) => _LocalCoverImage(path: snapshot.data),
     );
   }
 }

@@ -49,7 +49,21 @@ class MenuListTile<T> extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         spacing: 5.0,
         children: [
-          if (value != null) Text(value!, style: const TextStyle(fontSize: 12)),
+          if (value != null)
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width * 0.38,
+              ),
+              child: Tooltip(
+                message: value!,
+                child: Text(
+                  value!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
           const Icon(Icons.chevron_right),
         ],
       ),

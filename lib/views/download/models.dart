@@ -1,6 +1,16 @@
 part of 'background_downloader.dart';
 
-enum WorkerMessageType { pause, resume, delete, query, proxy, import }
+enum WorkerMessageType { pause, resume, delete, query, proxy, import, shutdown }
+
+class WorkerInitializationFailure {
+  const WorkerInitializationFailure({
+    required this.error,
+    required this.stackTrace,
+  });
+
+  final String error;
+  final String stackTrace;
+}
 
 class WorkerMessage {
   final WorkerMessageType type;

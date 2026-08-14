@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:haka_comic/database/download_task_helper.dart';
 import 'package:haka_comic/network/models.dart';
-import 'package:haka_comic/utils/common.dart';
 import 'package:haka_comic/utils/extension.dart';
+import 'package:haka_comic/views/download/download_storage.dart';
 import 'package:haka_comic/views/download/local_comic_files.dart';
 import 'package:path/path.dart' as p;
 
@@ -16,28 +16,34 @@ Future<List<ImageBase>> fetchLocalImages(
     (element) => element.order == payload.order,
     orElse: () => throw Exception('章节不存在，检查是否已被删除'),
   );
-  final downloadDir = await getDownloadDirectory();
-
-  final comicPath = p.join(downloadDir, comic.title.legalized);
-  if (!await Directory(comicPath).exists()) {
+  final storage = await DownloadStorage.load();
+  final comicRelativePath = comic.title.legalized;
+  if (!await storage.directoryExists(comicRelativePath)) {
     throw Exception('漫画不存在，检查是否已被删除');
   }
 
-  final chapterPath = p.join(
-    comicPath,
+  final chapterRelativePath = p.posix.join(
+    comicRelativePath,
     '${chapter.order}_${chapter.title.legalized}',
   );
-  var chapterDir = Directory(chapterPath);
+  Directory chapterDir;
 
-  if (!await chapterDir.exists()) {
+  if (await storage.directoryExists(chapterRelativePath)) {
+    chapterDir = Directory(
+      await storage.materializeDirectory(chapterRelativePath),
+    );
+  } else {
     // 兼容之前下载的漫画
-    final orderChapterPath = p.join(comicPath, chapter.title.legalized);
-    var dir = Directory(orderChapterPath);
-    if (await dir.exists()) {
-      chapterDir = dir;
-    } else {
+    final legacyRelativePath = p.posix.join(
+      comicRelativePath,
+      chapter.title.legalized,
+    );
+    if (!await storage.directoryExists(legacyRelativePath)) {
       throw Exception('漫画不存在，检查是否已被删除');
     }
+    chapterDir = Directory(
+      await storage.materializeDirectory(legacyRelativePath),
+    );
   }
 
   final files = await listImageFiles(chapterDir);

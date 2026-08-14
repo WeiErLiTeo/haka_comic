@@ -33,7 +33,12 @@ void main() {
     );
     expect(
       source,
-      contains('CachedNetworkImageProvider(url, cacheManager: cacheManager)'),
+      matches(
+        RegExp(
+          r'CachedNetworkImageProvider\(\s*url,\s*'
+          r'cacheManager: cacheManager,\s*cacheKey: cacheKey,\s*\)',
+        ),
+      ),
     );
     expect(source, isNot(contains('ExtendedNetworkImageProvider')));
   });
@@ -52,8 +57,20 @@ void main() {
     // 单页分支必须显式传入共享的 cacheManager，
     // 否则会与默认 cacheManager 抢同一个 Hive box 引发互相清缓存。
     expect(source, contains('cacheManager: cacheManager'));
-    expect(source, contains('CachedNetworkImage.evictFromCache('));
-    expect(source, contains('cacheManager: cacheManager'));
+    expect(
+      source,
+      contains('await cacheManager.removeFile(item.cacheKey ?? item.url);'),
+    );
+    expect(
+      source,
+      matches(
+        RegExp(
+          r'await CachedNetworkImageProvider\(\s*item\.url,\s*'
+          r'cacheManager: cacheManager,\s*cacheKey: item\.cacheKey,\s*'
+          r'\)\.evict\(\);',
+        ),
+      ),
+    );
     expect(source, isNot(contains('ExtendedNetworkImageProvider')));
     expect(source, isNot(contains('clearMemoryImageCache')));
   });

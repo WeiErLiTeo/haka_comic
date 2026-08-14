@@ -128,8 +128,8 @@ String _addThousandsSeparator(String numberStr) {
   return buffer.toString();
 }
 
-/// 根据平台返回不同的下载目录
-Future<String> getDownloadDirectory() async {
+/// 根据平台返回未配置自定义路径时的默认下载目录。
+Future<String> getDefaultDownloadDirectory() async {
   if (isIOS) {
     return (await getApplicationDocumentsDirectory()).path;
   }
@@ -147,6 +147,9 @@ Future<String> getDownloadDirectory() async {
 
   return (await getApplicationSupportDirectory()).path;
 }
+
+@Deprecated('Use DownloadStorage for active download storage access.')
+Future<String> getDownloadDirectory() => getDefaultDownloadDirectory();
 
 /// 复制文件
 Future<void> copyDirectory(Directory source, Directory destination) async {
